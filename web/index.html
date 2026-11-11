@@ -462,7 +462,7 @@ function insights(cur, cats, budgetFor) {
   const unc = cur.rows.filter((r) => r.category === "Uncategorised").reduce((a, r) => a + Number(r.spent), 0);
   if (unc > 20) out.push(li("", "?", `${gbp(unc, 0)} of spending isn't categorised yet. Sort it in Transactions and the app will remember.`));
   // Stale manual accounts
-  S.accounts.filter((a) => a.source === "manual" && (!a.last_import_at || Date.now() - new Date(a.last_import_at) > 35 * 86400000)).slice(0, 3).forEach((a) =>
+  S.accounts.filter((a) => a.source === "manual" && a.account_type !== "credit_card" && (!a.last_import_at || Date.now() - new Date(a.last_import_at) > 35 * 86400000)).slice(0, 3).forEach((a) =>
     out.push(li("", "↻", `<b>${esc(a.name)}</b> ${a.last_import_at ? `was last updated ${ago(a.last_import_at)}` : "has no statement uploaded yet"}. Upload a new statement in Accounts.`)));
   // Expensive card debt
   S.accounts.filter((a) => a.account_type === "credit_card" && a.interest_rate >= 15 && Number(a.balance) < -50).forEach((a) =>
