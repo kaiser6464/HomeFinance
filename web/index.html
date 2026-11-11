@@ -354,6 +354,9 @@ function render() {
 }
 
 /* ---------- derived data ---------- */
+const onPromo = (a) => a.promo_ends && a.promo_rate != null && new Date(a.promo_ends) > new Date();
+const effRate = (a) => (onPromo(a) ? Number(a.promo_rate) : a.interest_rate == null ? null : Number(a.interest_rate));
+
 const catById = (id) => S.categories.find((c) => c.id === id);
 const acctById = (id) => S.accounts.find((a) => a.id === id);
 const memberName = (uid) => S.members.find((m) => m.user_id === uid)?.display_name;
@@ -466,8 +469,10 @@ function insights(cur, cats, budgetFor) {
   S.accounts.filter((a) => a.source === "manual" && a.account_type !== "credit_card" && (!a.last_import_at || Date.now() - new Date(a.last_import_at) > 35 * 86400000)).slice(0, 3).forEach((a) =>
     out.push(li("", "↻", `<b>${esc(a.name)}</b> ${a.last_import_at ? `was last updated ${ago(a.last_import_at)}` : "has no statement uploaded yet"}. Upload a new statement in Accounts.`)));
   // Expensive card debt
-  S.accounts.filter((a) => a.account_type === "credit_card" && a.interest_rate >= 15 && Number(a.balance) < -50).forEach((a) =>
-    out.push(li("bad", "%", `<b>${esc(a.provider || a.name)}</b> charges ${a.interest_rate}% on ${gbp(-a.balance, 0)}, about ${gbp((-a.balance * a.interest_rate) / 1200, 0)} a month in interest.`)));
+  S.accounts.filter((a) => a.account_type === "credit_card" && effRate(a) >= 15 && Number(a.balance) < -50).sort((x, y) => (-y.balance * effRate(y)) - (-x.balance * effRate(x))).slice(0, 3).forEach((a) =>
+    out.push(li("bad", "%", `<b>${esc(a.provider || a.name)}</b> charges ${effRate(a)}% on ${gbp(-a.balance, 0)}, about ${gbp((-a.balance * effRate(a)) / 1200, 0)} a month in interest.`)));
+  S.accounts.filter((a) => onPromo(a) && (new Date(a.promo_ends) - new Date()) / 86400000 < 90).forEach((a) =>
+    out.push(li("", "!", `<b>${esc(a.provider || a.name)}</b>'s ${Number(a.promo_rate)}% deal ends on ${dayLabel(a.promo_ends)}. Plan to move or clear the ${gbp(-a.balance, 0)} before then.`)));
   // Biggest category
   if (cats[0]) out.push(li("good", "●", `Biggest category: <b>${esc(cats[0][0])}</b> at ${gbp(cats[0][1], 0)}.`));
   return out;
@@ -698,15 +703,15 @@ function viewCredit(v) {
   const order = { Mortgage: 0, Loan: 1, "Credit card": 2 };
   const rows = [...active].sort((a, b) => order[typeOf(a)] - order[typeOf(b)] || monthly(b) - monthly(a)).map((c) => {
     const a = acctFor(c.label); const owed = a ? Math.max(0, -Number(a.balance || 0)) : null;
-    const mi = a && a.interest_rate && owed ? (owed * a.interest_rate) / 1200 : null;
+    const er = a ? effRate(a) : null; const mi = er != null && owed ? (owed * er) / 1200 : null;
     const net = mi != null ? monthly(c) - mi : null;
-    const months = owed && net > 0 ? Math.ceil(Math.log(1 / (1 - (owed * (a.interest_rate / 1200)) / monthly(c))) / Math.log(1 + a.interest_rate / 1200)) : null;
+    const months = owed && net > 0 ? (er > 0 ? Math.ceil(Math.log(1 / (1 - (owed * (er / 1200)) / monthly(c))) / Math.log(1 + er / 1200)) : Math.ceil(owed / monthly(c))) : null;
     const t = typeOf(c);
     return `<tr><td><div class="merchant">${esc(PRETTY[c.label] || c.label)}</div><div class="sub-desc">from ${esc(c.paid_from || "")} · last ${gbp(c.last_amount)} on ${dayLabel(c.last_paid)}</div></td>
       <td><span class="chip ${t === "Credit card" ? "bad" : t === "Mortgage" ? "good" : "brass"}">${t}</span></td>
       <td class="r num"><b>${gbp(monthly(c))}</b></td>
       <td class="r num">${owed != null ? gbp(owed, 0) : `<span class="muted">—</span>`}</td>
-      <td class="r num">${a && a.interest_rate ? a.interest_rate + "%" : `<span class="muted">—</span>`}</td>
+      <td class="r num">${er != null ? er + "%" + (a && onPromo(a) ? `<div class="small muted">until ${dayLabel(a.promo_ends)} ${new Date(a.promo_ends).getFullYear()}</div>` : "") : `<span class="muted">—</span>`}</td>
       <td class="r num">${mi != null ? gbp(mi, 0) : `<span class="muted">—</span>`}</td>
       <td class="small">${net != null && net <= 0 ? `<span class="chip bad">balance growing</span>` : months ? `~${months < 24 ? months + " months" : (months / 12).toFixed(1) + " years"}` : `<span class="muted">—</span>`}</td></tr>`;
   }).join("");
@@ -735,10 +740,10 @@ function viewCards(v) {
   const owed = (a) => Math.max(0, -Number(a.balance || 0));
   const totOwed = cards.reduce((s, a) => s + owed(a), 0);
   const totLim = cards.reduce((s, a) => s + Number(a.credit_limit || 0), 0);
-  const monthlyInt = (a) => (a.interest_rate ? owed(a) * Number(a.interest_rate) / 100 / 12 : null);
+  const monthlyInt = (a) => (effRate(a) != null ? owed(a) * effRate(a) / 100 / 12 : null);
   const knownInt = cards.reduce((s, a) => s + (monthlyInt(a) || 0), 0);
-  const unknown = cards.filter((a) => a.interest_rate == null).length;
-  const sorted = [...cards].sort((a, b) => (Number(b.interest_rate ?? -1) - Number(a.interest_rate ?? -1)) || owed(b) - owed(a));
+  const unknown = cards.filter((a) => effRate(a) == null).length;
+  const sorted = [...cards].sort((a, b) => (Number(effRate(b) ?? -1) - Number(effRate(a) ?? -1)) || owed(b) - owed(a));
   const today = new Date();
   v.innerHTML = `
   <section class="figures">
@@ -755,11 +760,11 @@ function viewCards(v) {
       const promoSoon = a.promo_ends && (new Date(a.promo_ends) - today) / 86400000 < 45;
       const mi = monthlyInt(a);
       return `<tr>
-        <td><div class="merchant">${esc(a.provider || a.name)}</div><div class="sub-desc" title="${esc(a.card_notes || "")}">${esc(a.card_notes || a.name)}</div>${promoSoon ? `<span class="chip brass">promo ends ${dayLabel(a.promo_ends)}</span>` : ""}</td>
+        <td><div class="merchant">${esc(a.provider || a.name)}</div><div class="sub-desc" title="${esc(a.card_notes || "")}">${esc(a.card_notes || a.name)}</div>${onPromo(a) ? `<span class="chip ${promoSoon ? "brass" : "good"}">${Number(a.promo_rate)}% until ${new Date(a.promo_ends).toLocaleDateString("en-GB", { day: "numeric", month: "short", year: "numeric" })}</span>` : ""}</td>
         <td class="r"><input class="budget-input num" type="number" step="0.01" min="0" id="cb-${a.id}" data-f="balance" data-id="${a.id}" value="${owed(a).toFixed(2)}"></td>
         <td><div class="progress" title="${Math.round(pct)}%"><div class="${pct > 90 ? "over" : pct > 60 ? "near" : ""}" style="width:${Math.min(100, pct)}%"></div></div><span class="small muted num">${Math.round(pct)}%</span></td>
         <td class="r"><input class="budget-input num" type="number" step="50" min="0" id="cl-${a.id}" data-f="credit_limit" data-id="${a.id}" value="${a.credit_limit ?? ""}"></td>
-        <td class="r"><input class="budget-input num" type="number" step="0.01" min="0" id="cr-${a.id}" data-f="interest_rate" data-id="${a.id}" value="${a.interest_rate ?? ""}" placeholder="add"></td>
+        <td class="r"><input class="budget-input num" type="number" step="0.01" min="0" id="cr-${a.id}" data-f="interest_rate" data-id="${a.id}" value="${a.interest_rate ?? ""}" placeholder="add">${onPromo(a) ? `<div class="small muted">standard rate</div>` : ""}</td>
         <td class="r num">${mi != null ? gbp(mi) : `<span class="muted">—</span>`}</td></tr>`;
     }).join("")}
     </tbody></table></div>
