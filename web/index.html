@@ -315,7 +315,7 @@ function renderSetup(app) {
 }
 
 /* ---------- shell ---------- */
-const TABS = [["overview", "Overview"], ["subs", "Subscriptions"], ["spending", "Transactions"], ["budgets", "Budgets"], ["accounts", "Accounts"]];
+const TABS = [["overview", "Overview"], ["subs", "Subscriptions"], ["spending", "Transactions"], ["budgets", "Budgets"], ["cards", "Credit cards"], ["accounts", "Accounts"]];
 function renderShell(app) {
   app.innerHTML = `
   <header class="band"><div class="wrap">
@@ -349,7 +349,7 @@ function render() {
   const last = S.connections.map((c) => c.last_synced_at).filter(Boolean).sort().pop();
   $("#syncnote").textContent = S.connections.length ? `Synced ${ago(last)}` : "";
   const v = $("#view");
-  ({ overview: viewOverview, subs: viewSubs, spending: viewSpending, budgets: viewBudgets, accounts: viewAccounts })[S.tab](v);
+  (({ overview: viewOverview, subs: viewSubs, spending: viewSpending, budgets: viewBudgets, cards: viewCards, accounts: viewAccounts })[S.tab] || viewOverview)(v);
 }
 
 /* ---------- derived data ---------- */
@@ -464,6 +464,9 @@ function insights(cur, cats, budgetFor) {
   // Stale manual accounts
   S.accounts.filter((a) => a.source === "manual" && (!a.last_import_at || Date.now() - new Date(a.last_import_at) > 35 * 86400000)).slice(0, 3).forEach((a) =>
     out.push(li("", "↻", `<b>${esc(a.name)}</b> ${a.last_import_at ? `was last updated ${ago(a.last_import_at)}` : "has no statement uploaded yet"}. Upload a new statement in Accounts.`)));
+  // Expensive card debt
+  S.accounts.filter((a) => a.account_type === "credit_card" && a.interest_rate >= 15 && Number(a.balance) < -50).forEach((a) =>
+    out.push(li("bad", "%", `<b>${esc(a.provider || a.name)}</b> charges ${a.interest_rate}% on ${gbp(-a.balance, 0)}, about ${gbp((-a.balance * a.interest_rate) / 1200, 0)} a month in interest.`)));
   // Biggest category
   if (cats[0]) out.push(li("good", "●", `Biggest category: <b>${esc(cats[0][0])}</b> at ${gbp(cats[0][1], 0)}.`));
   return out;
@@ -625,6 +628,53 @@ function viewBudgets(v) {
       else must(await sb.from("budgets").upsert({ household_id: S.household.id, category_id: cat, monthly_limit: Number(val) }, { onConflict: "household_id,category_id" }));
       S.budgets = must(await sb.from("budgets").select("*")); toast("Budget saved"); viewBudgets(v);
     } catch (e) { toast(e.message, true); }
+  }));
+}
+
+
+/* ---------- credit cards ---------- */
+function viewCards(v) {
+  const cards = S.accounts.filter((a) => a.account_type === "credit_card");
+  if (!cards.length) { v.innerHTML = `<div class="panel empty">No credit cards yet. Add them in Accounts with the type "Credit card".</div>`; return; }
+  const owed = (a) => Math.max(0, -Number(a.balance || 0));
+  const totOwed = cards.reduce((s, a) => s + owed(a), 0);
+  const totLim = cards.reduce((s, a) => s + Number(a.credit_limit || 0), 0);
+  const monthlyInt = (a) => (a.interest_rate ? owed(a) * Number(a.interest_rate) / 100 / 12 : null);
+  const knownInt = cards.reduce((s, a) => s + (monthlyInt(a) || 0), 0);
+  const unknown = cards.filter((a) => a.interest_rate == null).length;
+  const sorted = [...cards].sort((a, b) => (Number(b.interest_rate ?? -1) - Number(a.interest_rate ?? -1)) || owed(b) - owed(a));
+  const today = new Date();
+  v.innerHTML = `
+  <section class="figures">
+    <div class="figure"><span class="label">Owed on cards</span><span class="val">${gbp(totOwed, 0)}</span><span class="delta muted">across ${cards.length} cards</span></div>
+    <div class="figure"><span class="label">Total limits</span><span class="val">${gbp(totLim, 0)}</span><span class="delta muted">${gbp(totLim - totOwed, 0)} unused</span></div>
+    <div class="figure"><span class="label">Using</span><span class="val" style="color:${totLim && totOwed / totLim > 0.5 ? "var(--bad)" : "var(--ink)"}">${totLim ? Math.round((totOwed / totLim) * 100) : 0}%</span><span class="delta muted">of available credit</span></div>
+    <div class="figure"><span class="label">Interest per month</span><span class="val">${gbp(knownInt, 0)}${unknown ? "+" : ""}</span><span class="delta muted">${unknown ? `${unknown} card${unknown > 1 ? "s" : ""} missing a rate` : "estimated from rates"}</span></div>
+  </section>
+  <section class="panel">
+    <div class="panel-head"><h2>Your cards</h2><span class="small muted">Highest rate first. Edit any figure and press Enter to save.</span></div>
+    <div class="table-wrap"><table><thead><tr><th>Card</th><th class="r">Owed</th><th>Limit used</th><th class="r">Limit</th><th class="r">Rate % p.a.</th><th class="r">Interest / mo</th></tr></thead><tbody>
+    ${sorted.map((a) => {
+      const pct = a.credit_limit ? (owed(a) / a.credit_limit) * 100 : 0;
+      const promoSoon = a.promo_ends && (new Date(a.promo_ends) - today) / 86400000 < 45;
+      const mi = monthlyInt(a);
+      return `<tr>
+        <td><div class="merchant">${esc(a.provider || a.name)}</div><div class="sub-desc" title="${esc(a.card_notes || "")}">${esc(a.card_notes || a.name)}</div>${promoSoon ? `<span class="chip brass">promo ends ${dayLabel(a.promo_ends)}</span>` : ""}</td>
+        <td class="r"><input class="budget-input num" type="number" step="0.01" min="0" id="cb-${a.id}" data-f="balance" data-id="${a.id}" value="${owed(a).toFixed(2)}"></td>
+        <td><div class="progress" title="${Math.round(pct)}%"><div class="${pct > 90 ? "over" : pct > 60 ? "near" : ""}" style="width:${Math.min(100, pct)}%"></div></div><span class="small muted num">${Math.round(pct)}%</span></td>
+        <td class="r"><input class="budget-input num" type="number" step="50" min="0" id="cl-${a.id}" data-f="credit_limit" data-id="${a.id}" value="${a.credit_limit ?? ""}"></td>
+        <td class="r"><input class="budget-input num" type="number" step="0.01" min="0" id="cr-${a.id}" data-f="interest_rate" data-id="${a.id}" value="${a.interest_rate ?? ""}" placeholder="add"></td>
+        <td class="r num">${mi != null ? gbp(mi) : `<span class="muted">—</span>`}</td></tr>`;
+    }).join("")}
+    </tbody></table></div>
+    <p class="small muted" style="margin:12px 0 0">Interest is a rough guide: balance × rate ÷ 12. Balances on 0% deals cost nothing until the deal ends. Find each card's rate on its monthly statement under "Your interest rates".</p>
+  </section>`;
+  v.querySelectorAll("input[data-f]").forEach((i) => (i.onchange = async () => {
+    const val = i.value.trim() === "" ? null : Number(i.value);
+    const patch = { [i.dataset.f]: i.dataset.f === "balance" && val != null ? -Math.abs(val) : val };
+    if (i.dataset.f === "balance") patch.balance_at = new Date().toISOString();
+    try { must(await sb.from("accounts").update(patch).eq("id", i.dataset.id)); const a = acctById(i.dataset.id); Object.assign(a, patch); toast("Saved"); viewCards(v); }
+    catch (e) { toast(e.message, true); }
   }));
 }
 
