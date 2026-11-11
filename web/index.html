@@ -507,19 +507,27 @@ function drawTrend(el) {
 
 /* ---------- subscriptions ---------- */
 function viewSubs(v) {
-  const list = S.subs.filter((s) => !s.looks_stopped);
-  const stopped = S.subs.filter((s) => s.looks_stopped);
+  const tf = (S.tagFilter ||= new Set());
+  const allTags = [...new Set(S.subs.flatMap((s) => s.tags || []))].sort((x, y) => x.localeCompare(y));
+  [...tf].forEach((t) => { if (!allTags.includes(t)) tf.delete(t); });
+  const match = (s) => !tf.size || [...tf].every((t) => (s.tags || []).includes(t));
+  const list = S.subs.filter((s) => !s.looks_stopped && match(s));
+  const stopped = S.subs.filter((s) => s.looks_stopped && match(s));
   const yearly = list.filter((s) => s.decision !== "ignore").reduce((a, s) => a + Number(s.annual_cost), 0);
   const saving = list.filter((s) => s.decision === "cancel").reduce((a, s) => a + Number(s.annual_cost), 0);
   const row = (s) => `<tr>
-    <td><div class="merchant">${esc(s.label)}</div><div class="sub-desc">${esc(s.category || "")} · ${esc(s.paid_by || "")} · ${esc(s.accounts || "")}</div></td>
+    <td><div class="merchant">${esc(s.custom_label || s.label)}</div>
+      <div class="sub-desc">${s.custom_label ? esc(s.label) + " · " : ""}${esc(s.category || "")} · ${esc(s.paid_by || "")} · ${esc(s.accounts || "")}</div>
+      ${s.note ? `<div class="small" style="margin-top:3px;max-width:380px">${esc(s.note)}</div>` : ""}
+      <div class="row" style="gap:4px;margin-top:4px">${(s.tags || []).map((t) => `<span class="chip">${esc(t)}</span>`).join("")}<button class="btn small ghost" style="padding:0 4px" data-edit="${esc(s.merchant_key)}">${s.note || (s.tags || []).length || s.custom_label ? "Edit" : "+ Add note or tag"}</button></div></td>
     <td>${esc(s.frequency)}${s.price_went_up ? ` <span class="chip bad" title="Was ${gbp(s.first_amount)}">price up</span>` : ""}</td>
     <td class="r num">${gbp(s.last_amount)}</td>
     <td class="r num"><b>${gbp(s.annual_cost, 0)}</b></td>
     <td class="num small">${s.looks_stopped ? `last ${dayLabel(s.last_paid)}` : dayLabel(s.next_expected)}</td>
     <td><div class="seg" data-key="${esc(s.merchant_key)}">
       ${["keep", "cancel", "ignore"].map((d) => `<button class="${s.decision === d ? "on" : ""} ${d === "cancel" ? "cancel" : ""}" data-d="${d}" title="${d === "ignore" ? "Not a subscription" : ""}">${d === "keep" ? "Keep" : d === "cancel" ? "Cancel" : "Not a sub"}</button>`).join("")}
-    </div></td></tr>`;
+    </div></td></tr>
+    <tr class="edit-row" id="ed-${esc(s.merchant_key).replace(/[^a-z0-9]/gi, "_")}" hidden><td colspan="6"></td></tr>`;
   const SUBCATS = new Set(["TV & streaming", "Software & apps", "Gym & fitness", "Entertainment"]);
   const live = list.filter((s) => s.decision !== "ignore");
   const subsList = live.filter((s) => SUBCATS.has(s.category));
@@ -530,25 +538,54 @@ function viewSubs(v) {
   const section = (title, arr, note) => arr.length ? `<section class="panel"><div class="panel-head"><h2>${title}</h2><span class="small muted">${note} · <b class="num">${gbp(sum(arr) / 12, 0)}</b> a month · ${gbp(sum(arr), 0)} a year</span></div>${table(arr)}</section>` : "";
   v.innerHTML = `
   <section class="figures" style="grid-template-columns:repeat(3,1fr)">
-    <div class="figure"><span class="label">Bills & regular payments</span><span class="val">${gbp(sum(live) / 12, 0)}<span class="small muted" style="font-family:var(--body);font-weight:500">/mo</span></span><span class="delta muted">${live.length} payments · ${gbp(yearly, 0)} a year</span></div>
+    <div class="figure"><span class="label">${tf.size ? "Tagged payments" : "Bills & regular payments"}</span><span class="val">${gbp(sum(live) / 12, 0)}<span class="small muted" style="font-family:var(--body);font-weight:500">/mo</span></span><span class="delta muted">${live.length} payments · ${gbp(yearly, 0)} a year</span></div>
     <div class="figure"><span class="label">Subscriptions</span><span class="val">${gbp(sum(subsList) / 12, 0)}<span class="small muted" style="font-family:var(--body);font-weight:500">/mo</span></span><span class="delta muted">${subsList.length} services · ${gbp(sum(subsList), 0)} a year</span></div>
     <div class="figure"><span class="label">Marked to cancel</span><span class="val" style="color:var(--good)">${gbp(saving, 0)}</span><span class="delta muted">saved per year</span></div>
   </section>
+  ${allTags.length ? `<div class="row" style="gap:6px"><span class="small muted">Filter by tag:</span>${allTags.map((t) => `<button class="btn small ${tf.has(t) ? "primary" : ""}" data-tag="${esc(t)}">${esc(t)}</button>`).join("")}${tf.size ? `<button class="btn small ghost" id="cleartags">Show all</button>` : ""}</div>` : ""}
   <p class="small muted" style="margin:0">Mortgage, car finance and credit card payments are on the <a href="#" id="gocredit">Credit &amp; loans</a> tab. Payments are found automatically from repeats over the last 13 months.</p>
   ${section("Subscriptions", subsList, "Streaming, apps and memberships")}
   ${section("Household bills and other regular payments", bills, "Council tax, utilities, insurance, maintenance and more")}
-  ${!live.length ? `<div class="panel empty">Regular payments appear here once there are about three months of transactions.</div>` : ""}
+  ${!live.length ? `<div class="panel empty">${tf.size ? "No regular payments have all of those tags." : "Regular payments appear here once there are about three months of transactions."}</div>` : ""}
   ${stopped.length ? `<section class="panel"><div class="panel-head"><h2>Looks like these stopped</h2><span class="small muted">No payment when one was expected</span></div>${table(stopped)}</section>` : ""}
-  ${ignored.length ? `<section class="panel"><div class="panel-head"><h2>Marked as not a regular payment</h2></div>${table(ignored)}</section>` : ""}`;
+  ${ignored.length ? `<section class="panel"><div class="panel-head"><h2>Marked as not a regular payment</h2></div>${table(ignored)}</section>` : ""}
+  <datalist id="taglist">${allTags.map((t) => `<option value="${esc(t)}">`).join("")}</datalist>`;
   $("#gocredit").onclick = (e) => { e.preventDefault(); document.querySelector("[data-tab=credit]").click(); };
+  v.querySelectorAll("[data-tag]").forEach((b) => (b.onclick = () => { const t = b.dataset.tag; tf.has(t) ? tf.delete(t) : tf.add(t); viewSubs(v); }));
+  const ct = $("#cleartags", v); if (ct) ct.onclick = () => { tf.clear(); viewSubs(v); };
+
+  const saveFlag = async (cur, patch) => {
+    const next = { decision: cur.decision ?? null, note: cur.note ?? null, tags: cur.tags || [], label: cur.custom_label ?? null, ...patch };
+    const empty = !next.decision && !next.note && !next.tags.length && !next.label;
+    if (empty) must(await sb.from("subscription_flags").delete().eq("merchant_key", cur.merchant_key));
+    else must(await sb.from("subscription_flags").upsert({ household_id: S.household.id, merchant_key: cur.merchant_key, ...next, updated_at: new Date().toISOString() }));
+    Object.assign(cur, { decision: next.decision, note: next.note, tags: next.tags, custom_label: next.label });
+    S.subs.filter((x) => x.merchant_key === cur.merchant_key).forEach((x) => Object.assign(x, { decision: next.decision, note: next.note, tags: next.tags, custom_label: next.label }));
+  };
   v.querySelectorAll(".seg button").forEach((b) => (b.onclick = async () => {
     const key = b.parentElement.dataset.key; const d = b.dataset.d;
     const cur = S.subs.find((s) => s.merchant_key === key);
-    try {
-      if (cur.decision === d) { must(await sb.from("subscription_flags").delete().eq("merchant_key", key)); cur.decision = null; }
-      else { must(await sb.from("subscription_flags").upsert({ household_id: S.household.id, merchant_key: key, decision: d, updated_at: new Date().toISOString() })); cur.decision = d; }
-      viewSubs(v);
-    } catch (e) { toast(e.message, true); }
+    try { await saveFlag(cur, { decision: cur.decision === d ? null : d }); viewSubs(v); } catch (e) { toast(e.message, true); }
+  }));
+  v.querySelectorAll("[data-edit]").forEach((b) => (b.onclick = () => {
+    const cur = S.subs.find((s) => s.merchant_key === b.dataset.edit);
+    const tr = b.closest("tr").nextElementSibling; const td = tr.firstElementChild; tr.hidden = false;
+    const id = tr.id;
+    td.innerHTML = `<form class="filters" style="grid-template-columns:repeat(auto-fit,minmax(170px,1fr));align-items:end;margin:0;position:sticky;left:0;max-width:min(100%, calc(100vw - 72px))">
+      <label class="field"><span>Name</span><input type="text" id="${id}-n" maxlength="60" placeholder="${esc(cur.label)}" value="${esc(cur.custom_label || "")}"></label>
+      <label class="field" style="grid-column:span 2"><span>Description</span><input type="text" id="${id}-d" maxlength="300" placeholder="e.g. Bethany's phone contract, ends March" value="${esc(cur.note || "")}"></label>
+      <label class="field"><span>Tags (comma separated)</span><input type="text" id="${id}-t" list="taglist" placeholder="e.g. Car, Pets, Bethany" value="${esc((cur.tags || []).join(", "))}"></label>
+      <div class="row" style="flex-wrap:nowrap"><button class="btn small primary">Save</button><button type="button" class="btn small ghost" data-cancel>Cancel</button></div></form>`;
+    $(`#${id}-d`, td).focus();
+    $("[data-cancel]", td).onclick = () => { tr.hidden = true; td.innerHTML = ""; };
+    $("form", td).onsubmit = async (e) => {
+      e.preventDefault();
+      const tags = [...new Set($(`#${id}-t`, td).value.split(",").map((x) => x.trim()).filter(Boolean).map((x) => x.slice(0, 30)))].slice(0, 10);
+      try {
+        await saveFlag(cur, { label: $(`#${id}-n`, td).value.trim() || null, note: $(`#${id}-d`, td).value.trim() || null, tags });
+        toast("Saved"); viewSubs(v);
+      } catch (er) { toast(er.message, true); }
+    };
   }));
 }
 
