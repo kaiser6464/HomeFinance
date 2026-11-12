@@ -705,34 +705,45 @@ function viewBudgets(v) {
 
 /* ---------- credit & loans ---------- */
 const COMMIT_MAP = [[/mbna/i, "MBNA"], [/lloyds/i, "Lloyds"], [/tesco bank/i, "Tesco Bank"], [/virgin/i, "Virgin Money"], [/santander/i, "Santander"],
-  [/b\/card|barclaycard/i, "Barclaycard"], [/^paypal$|4yx2222/i, "PayPal Credit"], [/nationwide/i, "Nationwide"], [/black horse/i, "Black Horse"], [/stellantis/i, "Stellantis"]];
+  [/b\/card|barclaycard/i, "Barclaycard"], [/^paypal$|4yx2222/i, "PayPal Credit"], [/nationwide/i, "Nationwide"], [/black horse/i, "Black Horse"], [/stellantis/i, "Stellantis"], [/admiral (money|fin|loan)/i, "Admiral"]];
 const PRETTY = { "NATIONWIDE B S": "Nationwide mortgage", "BLACK HORSE": "Ford Puma (Black Horse HP)", "STELLANTIS FS UK": "Stellantis car finance",
   "PayPal": "PayPal Credit", "PAYPAL *PYPL Payin": "PayPal Pay in 3", "SANTANDERCARDS LTD": "Santander card", "B/CARD PLAT VISA": "Barclaycard",
   "MBNA LIMITED": "MBNA card", "LLOYDS BANK": "Lloyds card", "TESCO BANK": "Tesco Bank card", "VIRGIN MONEY": "Virgin Money card" };
+function paymentsLeft(a) {
+  const end = new Date(a.ends_on + "T00:00:00"), day = end.getDate();
+  const from = a.first_payment_on && new Date(a.first_payment_on) > new Date() ? new Date(a.first_payment_on + "T00:00:00") : new Date();
+  let n = 0;
+  for (let d = new Date(from.getFullYear(), from.getMonth(), day); d <= end; d = new Date(d.getFullYear(), d.getMonth() + 1, day)) if (d >= from || +d === +from) n++;
+  return n;
+}
 function viewCredit(v) {
-  const acctFor = (label) => { const m = COMMIT_MAP.find(([re]) => re.test(label || "")); return m && S.accounts.find((a) => a.provider === m[1]); };
+  const acctFor = (label, c) => { if (c && c._acct) return c._acct; const m = COMMIT_MAP.find(([re]) => re.test(label || "")); return m && S.accounts.find((a) => a.provider === m[1]); };
   const recent = (c) => Number(c.monthly_avg) > 0 || (new Date() - new Date(c.last_paid)) / 86400000 < 45;
   const active = S.commit.filter(recent), ended = S.commit.filter((c) => !recent(c));
   const typeOf = (c) => (c.category === "Mortgage & rent" ? "Mortgage" : c.category === "Credit card payments" ? "Credit card" : "Loan");
   const monthly = (c) => Number(c.monthly_avg) || Number(c.last_amount);
+  // Loans set up in Accounts that haven't taken a payment yet (e.g. a new loan)
+  const matched = new Set(active.map((c) => acctFor(c.label)?.id).filter(Boolean));
+  S.accounts.filter((a) => ["loan", "mortgage"].includes(a.account_type) && a.monthly_payment && !matched.has(a.id)).forEach((a) =>
+    active.push({ label: a.name, category: a.account_type === "mortgage" ? "Mortgage & rent" : "Loans & finance", monthly_avg: a.monthly_payment, last_amount: a.monthly_payment, last_paid: null, paid_from: "", _acct: a, payments: 0 }));
   const total = active.reduce((s, c) => s + monthly(c), 0);
   const by = (t) => active.filter((c) => typeOf(c) === t).reduce((s, c) => s + monthly(c), 0);
   const inc = [1, 2, 3].reduce((s, i) => s + monthTotals(addMonths(monthStart(new Date()), -i)).inc, 0) / 3;
   const owedAll = S.accounts.filter((a) => ["credit_card", "loan", "mortgage"].includes(a.account_type)).reduce((s, a) => s + Math.max(0, -Number(a.balance || 0)), 0);
   const order = { Mortgage: 0, Loan: 1, "Credit card": 2 };
   const rows = [...active].sort((a, b) => order[typeOf(a)] - order[typeOf(b)] || monthly(b) - monthly(a)).map((c) => {
-    const a = acctFor(c.label); const owed = a ? Math.max(0, -Number(a.balance || 0)) : null;
+    const a = acctFor(c.label, c); const owed = a ? Math.max(0, -Number(a.balance || 0)) : null;
     const er = a ? effRate(a) : null; const mi = er != null && owed ? (owed * er) / 1200 : null;
     const net = mi != null ? monthly(c) - mi : null;
     const months = owed && net > 0 ? (er > 0 ? Math.ceil(Math.log(1 / (1 - (owed * (er / 1200)) / monthly(c))) / Math.log(1 + er / 1200)) : Math.ceil(owed / monthly(c))) : null;
     const t = typeOf(c);
-    return `<tr><td><div class="merchant">${esc(PRETTY[c.label] || c.label)}</div><div class="sub-desc">from ${esc(c.paid_from || "")} · last ${gbp(c.last_amount)} on ${dayLabel(c.last_paid)}</div>${a && a.card_notes && a.account_type !== "credit_card" ? `<div class="sub-desc" title="${esc(a.card_notes)}" style="max-width:420px">${esc(a.card_notes)}</div>` : ""}</td>
+    return `<tr><td><div class="merchant">${esc(PRETTY[c.label] || c.label)}</div><div class="sub-desc">${c.last_paid ? `from ${esc(c.paid_from || "")} · last ${gbp(c.last_amount)} on ${dayLabel(c.last_paid)}` : `<span class="chip good">new</span> no payments yet`}</div>${a && a.card_notes && a.account_type !== "credit_card" ? `<div class="sub-desc" title="${esc(a.card_notes)}" style="max-width:420px">${esc(a.card_notes)}</div>` : ""}</td>
       <td><span class="chip ${t === "Credit card" ? "bad" : t === "Mortgage" ? "good" : "brass"}">${t}</span></td>
       <td class="r num"><b>${gbp(monthly(c))}</b></td>
       <td class="r num">${owed != null ? gbp(owed, 0) : `<span class="muted">—</span>`}</td>
       <td class="r num">${er != null ? er + "%" + (a && onPromo(a) ? `<div class="small muted">until ${dayLabel(a.promo_ends)} ${new Date(a.promo_ends).getFullYear()}</div>` : "") : `<span class="muted">—</span>`}</td>
       <td class="r num">${mi != null ? gbp(mi, 0) : `<span class="muted">—</span>`}</td>
-      <td class="small">${a && a.ends_on ? `${new Date(a.ends_on).toLocaleDateString("en-GB", { month: "short", year: "numeric" })}<div class="muted">${Math.max(0, Math.round((new Date(a.ends_on) - new Date()) / 2629800000))} payments left</div>` : net != null && net <= 0 ? `<span class="chip bad">balance growing</span>` : months ? `~${months < 24 ? months + " months" : (months / 12).toFixed(1) + " years"}` : `<span class="muted">—</span>`}</td></tr>`;
+      <td class="small">${a && a.ends_on ? `${new Date(a.ends_on).toLocaleDateString("en-GB", { month: "short", year: "numeric" })}<div class="muted">${paymentsLeft(a)} payments left</div>` : net != null && net <= 0 ? `<span class="chip bad">balance growing</span>` : months ? `~${months < 24 ? months + " months" : (months / 12).toFixed(1) + " years"}` : `<span class="muted">—</span>`}</td></tr>`;
   }).join("");
   v.innerHTML = `
   <section class="figures">
