@@ -420,6 +420,7 @@ function viewOverview(v) {
     <div class="figure"><span class="label">Left over</span><span class="val" style="color:${cur.inc - cur.out >= 0 ? "var(--good)" : "var(--bad)"}">${gbp(cur.inc - cur.out, 0)}</span><span class="delta muted">in minus spent</span></div>
     <div class="figure"><span class="label">Bills & subscriptions</span><span class="val">${gbp(subsM, 0)}<span class="small muted" style="font-family:var(--body);font-weight:500">/mo</span></span><span class="delta muted">${activeSubs().length} regular payments · ${gbp(subsM * 12, 0)} a year</span></div>
   </section>
+  ${balancesStrip()}
   <div class="grid-2">
     <section class="panel">
       <div class="panel-head"><h2>Where it went</h2><span class="small muted">Bar marker = your budget</span></div>
@@ -444,6 +445,24 @@ function viewOverview(v) {
   </section>`;
   $("#mn").append(monthNav(() => viewOverview(v)));
   drawTrend($("#trend"));
+}
+
+function balancesStrip() {
+  const sumOf = (pred) => S.accounts.filter(pred).reduce((t, a) => t + Number(a.balance || 0), 0);
+  const cash = sumOf((a) => a.account_type === "current");
+  const savings = sumOf((a) => a.account_type === "savings");
+  const cards = -sumOf((a) => a.account_type === "credit_card");
+  const loans = -sumOf((a) => a.account_type === "loan");
+  const mortgage = -sumOf((a) => a.account_type === "mortgage");
+  const oldest = S.accounts.filter((a) => a.source === "manual" && ["current", "savings"].includes(a.account_type) && a.balance_at).map((a) => a.balance_at).sort()[0];
+  const cell = (label, val, sub, colour) => `<div class="figure"><span class="label">${label}</span><span class="val" style="font-size:22px${colour ? ";color:" + colour : ""}">${gbp(val, 0)}</span><span class="delta muted">${sub}</span></div>`;
+  return `<section class="figures" style="grid-template-columns:repeat(auto-fit,minmax(150px,1fr))">
+    ${cell("In current accounts", cash, oldest ? "First Direct as of " + ago(oldest) : "&nbsp;")}
+    ${cell("Savings", savings, "joint savings")}
+    ${cell("Owed on cards", cards, "all credit cards", "var(--bad)")}
+    ${cell("Car finance & loans", loans, "settlement figures")}
+    ${mortgage ? cell("Mortgage", mortgage, "Nationwide") : ""}
+  </section>`;
 }
 function insights(cur, cats, budgetFor) {
   const out = [];
