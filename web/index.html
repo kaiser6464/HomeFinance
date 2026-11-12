@@ -687,7 +687,7 @@ function viewBudgets(v) {
 /* ---------- credit & loans ---------- */
 const COMMIT_MAP = [[/mbna/i, "MBNA"], [/lloyds/i, "Lloyds"], [/tesco bank/i, "Tesco Bank"], [/virgin/i, "Virgin Money"], [/santander/i, "Santander"],
   [/b\/card|barclaycard/i, "Barclaycard"], [/^paypal$|4yx2222/i, "PayPal Credit"], [/nationwide/i, "Nationwide"], [/black horse/i, "Black Horse"], [/stellantis/i, "Stellantis"]];
-const PRETTY = { "NATIONWIDE B S": "Nationwide mortgage", "BLACK HORSE": "Black Horse car finance", "STELLANTIS FS UK": "Stellantis car finance",
+const PRETTY = { "NATIONWIDE B S": "Nationwide mortgage", "BLACK HORSE": "Ford Puma (Black Horse HP)", "STELLANTIS FS UK": "Stellantis car finance",
   "PayPal": "PayPal Credit", "PAYPAL *PYPL Payin": "PayPal Pay in 3", "SANTANDERCARDS LTD": "Santander card", "B/CARD PLAT VISA": "Barclaycard",
   "MBNA LIMITED": "MBNA card", "LLOYDS BANK": "Lloyds card", "TESCO BANK": "Tesco Bank card", "VIRGIN MONEY": "Virgin Money card" };
 function viewCredit(v) {
@@ -707,13 +707,13 @@ function viewCredit(v) {
     const net = mi != null ? monthly(c) - mi : null;
     const months = owed && net > 0 ? (er > 0 ? Math.ceil(Math.log(1 / (1 - (owed * (er / 1200)) / monthly(c))) / Math.log(1 + er / 1200)) : Math.ceil(owed / monthly(c))) : null;
     const t = typeOf(c);
-    return `<tr><td><div class="merchant">${esc(PRETTY[c.label] || c.label)}</div><div class="sub-desc">from ${esc(c.paid_from || "")} · last ${gbp(c.last_amount)} on ${dayLabel(c.last_paid)}</div></td>
+    return `<tr><td><div class="merchant">${esc(PRETTY[c.label] || c.label)}</div><div class="sub-desc">from ${esc(c.paid_from || "")} · last ${gbp(c.last_amount)} on ${dayLabel(c.last_paid)}</div>${a && a.card_notes && a.account_type !== "credit_card" ? `<div class="sub-desc" title="${esc(a.card_notes)}" style="max-width:420px">${esc(a.card_notes)}</div>` : ""}</td>
       <td><span class="chip ${t === "Credit card" ? "bad" : t === "Mortgage" ? "good" : "brass"}">${t}</span></td>
       <td class="r num"><b>${gbp(monthly(c))}</b></td>
       <td class="r num">${owed != null ? gbp(owed, 0) : `<span class="muted">—</span>`}</td>
       <td class="r num">${er != null ? er + "%" + (a && onPromo(a) ? `<div class="small muted">until ${dayLabel(a.promo_ends)} ${new Date(a.promo_ends).getFullYear()}</div>` : "") : `<span class="muted">—</span>`}</td>
       <td class="r num">${mi != null ? gbp(mi, 0) : `<span class="muted">—</span>`}</td>
-      <td class="small">${net != null && net <= 0 ? `<span class="chip bad">balance growing</span>` : months ? `~${months < 24 ? months + " months" : (months / 12).toFixed(1) + " years"}` : `<span class="muted">—</span>`}</td></tr>`;
+      <td class="small">${a && a.ends_on ? `${new Date(a.ends_on).toLocaleDateString("en-GB", { month: "short", year: "numeric" })}<div class="muted">${Math.max(0, Math.round((new Date(a.ends_on) - new Date()) / 2629800000))} payments left</div>` : net != null && net <= 0 ? `<span class="chip bad">balance growing</span>` : months ? `~${months < 24 ? months + " months" : (months / 12).toFixed(1) + " years"}` : `<span class="muted">—</span>`}</td></tr>`;
   }).join("");
   v.innerHTML = `
   <section class="figures">
@@ -724,8 +724,8 @@ function viewCredit(v) {
   </section>
   <section class="panel">
     <div class="panel-head"><h2>Monthly credit commitments</h2><span class="small muted">Average of the last 3 full months · ${gbp(owedAll, 0)} owed in total where balances are known</span></div>
-    ${rows ? `<div class="table-wrap"><table><thead><tr><th>Payment</th><th>Type</th><th class="r">Per month</th><th class="r">Owed</th><th class="r">Rate</th><th class="r">Interest / mo</th><th>Paid off in</th></tr></thead><tbody>${rows}</tbody></table></div>` : `<div class="empty">No mortgage, loan or card payments found yet.</div>`}
-    <p class="small muted" style="margin:12px 0 0">"Paid off in" assumes the same payment each month and no new spending on the card. Balances and rates come from the cards table below and the Accounts tab.</p>
+    ${rows ? `<div class="table-wrap"><table><thead><tr><th>Payment</th><th>Type</th><th class="r">Per month</th><th class="r">Owed</th><th class="r">Rate</th><th class="r">Interest / mo</th><th>Paid off</th></tr></thead><tbody>${rows}</tbody></table></div>` : `<div class="empty">No mortgage, loan or card payments found yet.</div>`}
+    <p class="small muted" style="margin:12px 0 0">"Paid off" uses the agreement end date where known; otherwise it assumes the same payment each month and no new spending on the card. Loan balances are settlement figures. Balances and rates come from the cards table below and the Accounts tab.</p>
   </section>
   ${ended.length ? `<section class="panel"><div class="panel-head"><h2>No longer paying</h2><span class="small muted">Credit payments seen earlier this year that have stopped</span></div>
     <div class="table-wrap"><table><tbody>${ended.map((c) => `<tr><td class="merchant">${esc(PRETTY[c.label] || c.label)}</td><td class="small muted">${c.payments} payment${c.payments > 1 ? "s" : ""}, last ${gbp(c.last_amount)} on ${dayLabel(c.last_paid)}</td><td class="r num">${gbp(c.total_12m, 0)} paid</td></tr>`).join("")}</tbody></table></div></section>` : ""}
